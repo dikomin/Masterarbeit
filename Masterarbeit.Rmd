@@ -1,0 +1,826 @@
+---
+title: "Fest verankert – Eine Simulationsstudie zu den Voraussetzungen für robustes Test-Equating"
+author: "Dominik Weber"
+date: "März 2021"
+output: html_document
+---
+
+# Loading packages
+
+```{r message = FALSE, warning = FALSE}
+library(car)
+library(catIrt)
+library(dplyr)
+library(effectsize)
+library(equateIRT)
+library(ggplot2)
+library(jmv)
+library(ltm)
+library(MOTE)
+library(psych)
+library(tidyr)
+```
+
+```{r include = FALSE}
+# Preparing structure of the equating design
+
+cleanData = function(sample){
+    return(sample[, colSums(is.na(sample)) == 0])
+}
+directGetDiff = function(subsamples){
+  estc = list()
+  estv = list()
+  # subsamples = lapply(subsamples, cleanData)
+  for (i in 1:length(subsamples)) {
+    subsample = subsamples[[i]]
+    est = import.ltm(rasch(subsample[, 1:(ncol(subsample)-2)]), display = FALSE)
+    estc[[i]] = est$coef
+    estv[[i]] = est$var
+  }
+  test <- paste("test", 1:k, sep = "")
+  links = character(length(subsamples) - 1)
+  for (i in 1:length(subsamples) - 1) {
+    links[i] = paste(test[i + 1], test[1], sep = ".")
+  }
+  
+  mod1pl <- modIRT(coef = estc, var = estv, names = test, display = FALSE)
+  direclist1pl <- alldirec(mods = mod1pl, method = "mean-mean")
+  
+  result = data.frame(Item = 1:200, Diff = 1:200)
+  for (i in 1:length(links)) {
+    itmData = itm(direclist1pl, links[i])
+    itmData = itmData[-grep("Dscrmn", itmData$Item),]
+    if(i == 1){
+      result[1:20, 1] = itmData[!is.na(itmData[3]), 1]
+      result[1:20, 2] = itmData[!is.na(itmData[3]), 3]
+    }
+    row = (i) * 20 + 1
+    result[row:(row+19), 1] = itmData[is.na(itmData[3]), 1]
+    result[row:(row+19), 2] = itmData[is.na(itmData[3]), 4]
+  }
+  result[, 1] = as.numeric(gsub(pattern = "Dffclt.Item", replacement = "", x = result[, 1]))
+  # attach(result)
+  result = result[order(result$Item),]
+  # detach(result)
+  return(result)
+}
+indirectGetDiff = function(subsamples, items = 25) {
+    estc = list()
+    estv = list()
+    # subsamples = lapply(subsamples, cleanData)
+    for (i in 1:length(subsamples)) {
+        subsample = subsamples[[i]]
+        est = import.ltm(rasch(subsample[, 1:(ncol(subsample) - 2)]), display = FALSE)
+        estc[[i]] = est$coef
+        estv[[i]] = est$var
+    }
+    rm(subsample, est)
+    test <- paste("test", 1:10, sep = "")
+    links = character(length(subsamples) - 1)
+    for (i in 1:length(subsamples) - 1) {
+        links[i] = paste(test[i + 1], test[1], sep = ".")
+    }
+    mod1pl <- modIRT(coef = estc, var = estv, names = test, display = FALSE)
+    rm(estc, estv)
+    direclist1pl <- alldirec(mods = mod1pl, method = "mean-mean")
+    
+    cecs = list()
+    for (i in 3:10) {
+        cecs[[i-2]] = chainec(r = i, direclist = direclist1pl, f2 = "test1", f1 = test[i])
+    }
+    paths=list()
+    paths[[1]] = "test3.test2.test1"
+    for (i in 2:8) {
+        paths[[i]] = paste(test[i + 2],paths[[i - 1]], sep = ".")
+    }
+    
+    result = data.frame(Item = 1:200, Diff = 1:200)
+    
+    itmData = itm(direclist1pl,"test2.test1")
+    itmData = itmData[-grep("Dscrmn", itmData$Item),]
+    result[1:items, 1] = itmData[!is.na(itmData[3]), 1]
+    result[1:items, 2] = itmData[!is.na(itmData[3]), 3]
+    result[(items + 1):(items + 20), 1] = itmData[is.na(itmData[3]), 1]
+    result[(items + 1):(items + 20), 2] = itmData[is.na(itmData[3]), 4]
+    
+    pathsLen = length(paths)
+    for (i in 1:length(paths)) {
+        if(i < pathsLen){
+            row = (items + 21) + items * (i - 1)
+            itmData = itm(cecs[[i]],paths[[i]], bistype = "weighted")
+            itmData = itmData[-grep("Dscrmn", itmData$Item),]
+            result[row:(row + items - 1), 1] = itmData[is.na(itmData[3]), 1]
+            result[row:(row + items - 1), 2] = itmData[is.na(itmData[3]), 4]
+        }
+        else if(i == pathsLen){
+            row = (items + 21) + items * (i - 1)
+            itmData = itm(cecs[[i]],paths[[i]], bistype = "weighted")
+            itmData = itmData[-grep("Dscrmn", itmData$Item),]
+            result[row:(row + 19), 1] = itmData[is.na(itmData[3]), 1]
+            result[row:(row + 19), 2] = itmData[is.na(itmData[3]), 4]
+        }
+    }
+    
+    result[, 1] = as.numeric(gsub(pattern = "Dffclt.Item", replacement = "", x = result[, 1]))
+    result = result[order(result$Item),]
+    result <- result %>% group_by(Item) %>% summarise_each(list(mean = mean))
+}
+```
+
+
+# Settings
+
+## Global parameters
+
+In order to simulate data certain parameters need to be entered. The software must know how many cases (N) and how many samples (k) are to be generated. These variables can be be set freely with values bigger than zero. Also, in order to gain reproducible results the randomization seed in R can be fixed.
+
+```{r}
+N = 50
+k = 10
+set.seed(123456)
+```
+
+## IRT specific parameters
+
+Depending on which IRT model you want to simulate data for, different parameters are required.
+For the 1PL (Rasch) model, item discrimination (a) and guessing parameters (c) are assumed to be constant and are usually fixed to 1 and 0 respectively. Only the item difficulty (b) varies across items and needs to be defined.
+
+```{r}
+a = 1
+b = c(rep(-1.34, 20), rep(-0.36, 40), rep(-0.13, 80), rep(1.06, 40), rep(1.87, 20))
+c = 0
+params = cbind(a, b, c)
+rm(a, b, c)
+```
+
+## Creating item sets
+
+Since different versions of test equating are to be examined, a list of item sets needs to be defined.
+
+```{r include = FALSE}
+directSet1 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182),
+  c(3:4,  25:28,69:76,  145:148,183:184,1,21,61,141,181),
+  c(5:6,  29:32,77:84,  149:152,185:186,1,21,61,141,181),
+  c(7:8,  33:36,85:92,  153:156,187:188,1,21,61,141,181),
+  c(9:10, 37:40,93:100, 157:160,189:190,1,21,61,141,181),
+  c(11:12,41:44,101:108,161:164,191:192,1,21,61,141,181),
+  c(13:14,45:48,109:116,165:168,193:194,1,21,61,141,181),
+  c(15:16,49:52,117:124,169:172,195:196,1,21,61,141,181),
+  c(17:18,53:56,125:132,173:176,197:198,1,21,61,141,181),
+  c(19:20,57:60,133:140,177:180,199:200,1,21,61,141,181)
+)
+directSet2 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182),
+  c(3:4,  25:28,69:76,  145:148,183:184,1,21,141,181),
+  c(5:6,  29:32,77:84,  149:152,185:186,1,21,141,181),
+  c(7:8,  33:36,85:92,  153:156,187:188,1,21,141,181),
+  c(9:10, 37:40,93:100, 157:160,189:190,1,21,141,181),
+  c(11:12,41:44,101:108,161:164,191:192,1,21,141,181),
+  c(13:14,45:48,109:116,165:168,193:194,1,21,141,181),
+  c(15:16,49:52,117:124,169:172,195:196,1,21,141,181),
+  c(17:18,53:56,125:132,173:176,197:198,1,21,141,181),
+  c(19:20,57:60,133:140,177:180,199:200,1,21,141,181)
+)
+directSet3 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182),
+  c(3:4,  25:28,69:76,  145:148,183:184,21,61,141),
+  c(5:6,  29:32,77:84,  149:152,185:186,21,61,141),
+  c(7:8,  33:36,85:92,  153:156,187:188,21,61,141),
+  c(9:10, 37:40,93:100, 157:160,189:190,21,61,141),
+  c(11:12,41:44,101:108,161:164,191:192,21,61,141),
+  c(13:14,45:48,109:116,165:168,193:194,21,61,141),
+  c(15:16,49:52,117:124,169:172,195:196,21,61,141),
+  c(17:18,53:56,125:132,173:176,197:198,21,61,141),
+  c(19:20,57:60,133:140,177:180,199:200,21,61,141)
+)
+directSet4 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182),
+  c(3:4,  25:28,69:76,  145:148,183:184,1,181),
+  c(5:6,  29:32,77:84,  149:152,185:186,1,181),
+  c(7:8,  33:36,85:92,  153:156,187:188,1,181),
+  c(9:10, 37:40,93:100, 157:160,189:190,1,181),
+  c(11:12,41:44,101:108,161:164,191:192,1,181),
+  c(13:14,45:48,109:116,165:168,193:194,1,181),
+  c(15:16,49:52,117:124,169:172,195:196,1,181),
+  c(17:18,53:56,125:132,173:176,197:198,1,181),
+  c(19:20,57:60,133:140,177:180,199:200,1,181)
+)
+directSet5 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182),
+  c(3:4,  25:28,69:76,  145:148,183:184,61),
+  c(5:6,  29:32,77:84,  149:152,185:186,61),
+  c(7:8,  33:36,85:92,  153:156,187:188,61),
+  c(9:10, 37:40,93:100, 157:160,189:190,61),
+  c(11:12,41:44,101:108,161:164,191:192,61),
+  c(13:14,45:48,109:116,165:168,193:194,61),
+  c(15:16,49:52,117:124,169:172,195:196,61),
+  c(17:18,53:56,125:132,173:176,197:198,61),
+  c(19:20,57:60,133:140,177:180,199:200,61)
+)
+indirectSet1 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182,20,60,140,180,200),
+  c(3:4,  25:28,69:76,  145:148,183:184,2, 24,68, 144,182),
+  c(5:6,  29:32,77:84,  149:152,185:186,4, 28,76, 148,184),
+  c(7:8,  33:36,85:92,  153:156,187:188,6, 32,84, 152,186),
+  c(9:10, 37:40,93:100, 157:160,189:190,8, 36,92, 156,188),
+  c(11:12,41:44,101:108,161:164,191:192,10,40,100,160,190),
+  c(13:14,45:48,109:116,165:168,193:194,12,44,108,164,192),
+  c(15:16,49:52,117:124,169:172,195:196,14,48,116,168,194),
+  c(17:18,53:56,125:132,173:176,197:198,16,52,124,172,196),
+  c(19:20,57:60,133:140,177:180,199:200,18,56,132,176,198)
+)
+indirectSet2 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182,20,60,180,200),
+  c(3:4,  25:28,69:76,  145:148,183:184,2, 24,144,182),
+  c(5:6,  29:32,77:84,  149:152,185:186,4, 28,148,184),
+  c(7:8,  33:36,85:92,  153:156,187:188,6, 32,152,186),
+  c(9:10, 37:40,93:100, 157:160,189:190,8, 36,156,188),
+  c(11:12,41:44,101:108,161:164,191:192,10,40,160,190),
+  c(13:14,45:48,109:116,165:168,193:194,12,44,164,192),
+  c(15:16,49:52,117:124,169:172,195:196,14,48,168,194),
+  c(17:18,53:56,125:132,173:176,197:198,16,52,172,196),
+  c(19:20,57:60,133:140,177:180,199:200,18,56,176,198)
+)
+indirectSet3 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182,60,140,180),
+  c(3:4,  25:28,69:76,  145:148,183:184,24,68, 144),
+  c(5:6,  29:32,77:84,  149:152,185:186,28,76, 148),
+  c(7:8,  33:36,85:92,  153:156,187:188,32,84, 152),
+  c(9:10, 37:40,93:100, 157:160,189:190,36,92, 156),
+  c(11:12,41:44,101:108,161:164,191:192,40,100,160),
+  c(13:14,45:48,109:116,165:168,193:194,44,108,164),
+  c(15:16,49:52,117:124,169:172,195:196,48,116,168),
+  c(17:18,53:56,125:132,173:176,197:198,52,124,172),
+  c(19:20,57:60,133:140,177:180,199:200,56,132,176)
+)
+indirectSet4 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182,20,200),
+  c(3:4,  25:28,69:76,  145:148,183:184,2, 182),
+  c(5:6,  29:32,77:84,  149:152,185:186,4, 184),
+  c(7:8,  33:36,85:92,  153:156,187:188,6, 186),
+  c(9:10, 37:40,93:100, 157:160,189:190,8, 188),
+  c(11:12,41:44,101:108,161:164,191:192,10,190),
+  c(13:14,45:48,109:116,165:168,193:194,12,192),
+  c(15:16,49:52,117:124,169:172,195:196,14,194),
+  c(17:18,53:56,125:132,173:176,197:198,16,196),
+  c(19:20,57:60,133:140,177:180,199:200,18,198)
+)
+indirectSet5 = list(
+  c(1:2,  21:24,61:68,  141:144,181:182,140),
+  c(3:4,  25:28,69:76,  145:148,183:184,68),
+  c(5:6,  29:32,77:84,  149:152,185:186,76),
+  c(7:8,  33:36,85:92,  153:156,187:188,84),
+  c(9:10, 37:40,93:100, 157:160,189:190,92),
+  c(11:12,41:44,101:108,161:164,191:192,100),
+  c(13:14,45:48,109:116,165:168,193:194,108),
+  c(15:16,49:52,117:124,169:172,195:196,116),
+  c(17:18,53:56,125:132,173:176,197:198,124),
+  c(19:20,57:60,133:140,177:180,199:200,132)
+)
+sets=list(directSet1, directSet2, directSet3, directSet4, directSet5,
+          indirectSet1, indirectSet2, indirectSet3, indirectSet4, indirectSet5)
+rm(directSet1, directSet2, directSet3, directSet4, directSet5,
+   indirectSet1, indirectSet2, indirectSet3, indirectSet4, indirectSet5)
+```
+
+
+# Starting the simulation
+
+For all models the person parameter theta needs to be set but unless data for a special sample is desired, a normal distribution should be used. The raw data are generated only once for all 10 anchor variants in order to avoid sample bias.
+
+```{r include = FALSE}
+work = data.frame()
+for (i in 1:k) {
+  theta = rnorm(N)
+  sim.data <- simIrt(theta = theta, params = params, mod = "brm")
+  #Combine item responses for the two groups into one file.
+  sim.data.resp <- sim.data$resp
+  work = rbind(work, cbind(sim.data.resp, i))
+}
+colnames(work) = c(paste("Item", 1:200, sep = ""), "i")
+rm(theta, sim.data, sim.data.resp, params)
+```
+
+## Subsetting the data
+
+In order to estimate how many items are needed for an anchoring approach, in the next step it will be determined which items are solved by which subsample.
+
+```{r}
+for (i in 1:length(sets)) { #for each anchor variant
+  currentSet = unlist(sets[i], recursive=F) #extract the testforms
+  data = work # make a copy of the data set
+  for (j in 1:length(currentSet)) { #for each testform 
+    currentTest = unlist(currentSet[j], recursive = F) #extract a vector of items from the testform
+    data[, 1:200][(N * (j - 1) + 1):(N * j),-currentTest] = NA #set all but the extracted items to NA for a subsample
+  }
+  if(exists("allSamples")) allSamples = rbind(allSamples, data.frame(data, anchorType = i)) #in the first iteration create the result dataFrame
+  else  allSamples = data.frame(data, anchorType = i) #in the following iterations append
+}
+rm(currentSet, currentTest, data, work)
+```
+
+# Running the test equating
+
+```{r}
+resultData = data.frame(realDiff=c(rep(-1.34, 20), rep(-0.36, 40), rep(-0.13, 80), rep(1.06, 40), rep(1.87, 20)))
+system.time(
+for (i in 1:length(sets)) {
+  sample = allSamples[allSamples$anchorType == i,]
+  subsamples = split(sample, sample$i)
+  subsamples = lapply(subsamples, cleanData)
+  if(i < 6) {res = directGetDiff(subsamples)}
+  else {res = indirectGetDiff(subsamples,(31 - i))}
+  resultData = cbind(resultData, res)
+}
+)
+resultData$errorAT1 = (resultData[, 3] - resultData[, 1]) ^ 2
+resultData$errorAT2 = (resultData[, 5] - resultData[, 1]) ^ 2
+resultData$errorAT3 = (resultData[, 7] - resultData[, 1]) ^ 2
+resultData$errorAT4 = (resultData[, 9] - resultData[, 1]) ^ 2
+resultData$errorAT5 = (resultData[, 11] - resultData[, 1]) ^ 2
+resultData$errorAT6 = (resultData[, 13] - resultData[, 1]) ^ 2
+resultData$errorAT7 = (resultData[, 15] - resultData[, 1]) ^ 2
+resultData$errorAT8 = (resultData[, 17] - resultData[, 1]) ^ 2
+resultData$errorAT9 = (resultData[, 19] - resultData[, 1]) ^ 2
+resultData$errorAT10 = (resultData[, 21] - resultData[, 1]) ^ 2
+psych::describe(resultData[, (ncol(resultData) - 9):ncol(resultData)])
+```
+
+## Loading data of all iterations
+
+```{r}
+load("allResults.Rdata")
+```
+
+# Analyzing results of the test equating
+
+## Boxplot for estimated Difficulties
+
+```{r}
+plotData = data.frame(type = c(rep("Direct", 50), rep("Indirect", 50)),
+                      anchors = as.factor(rep(1:5, 20)),
+                      diff = rnorm(100))
+diffPlot = ggplot(plotData, aes(x = anchors, y = diff)) +
+  geom_boxplot() + 
+  scale_y_continuous(name = "Estimated average item difficulty")+
+  scale_x_discrete(name = "Number of anchor items per test sets")+
+  ggtitle("Boxplot for estimated Difficulties") +
+  theme_bw() +
+  theme(plot.title = element_text(size = 14, face = "bold"),
+        text = element_text(size = 12),
+        axis.title = element_text(face = "bold"),
+        axis.text.x = element_text(size = 11)) +
+  facet_grid(. ~ type)
+diffPlot
+```
+
+
+## Creating a 2x5x5 matrix with the 3 factors ET, EV and RA
+
+ET = Equating Type, EV = Equating variant, RA = Number of Rules (Item Difficulty)
+
+```{r}
+Iterations = 1000
+estimates = data.frame(matrix(nrow=1000, ncol = 51))
+estimates[,1] = 1:1000
+colnames(estimates)[1] = "Iteration"
+tmpString = ""
+for (i in 1:2) {
+  for (j in 1:5) {
+    for (k in 1:5) {
+      if(i == 1) tmpString = paste(paste("d", j, sep = ""), paste("v", k, sep = ""), sep = "_")
+      else tmpString = paste(paste("i", j, sep = ""), paste("v", k, sep = ""), sep = "_")
+      col = (i - 1) * 25 + (j - 1) * 5 + k + 1
+      colnames(estimates)[col] = tmpString
+    }
+  }
+}
+rm(i, j, k, col, tmpString)
+itemSets = list(1:20, 21:60, 61:140, 141:180, 181:200)
+for (it in 1:Iterations) {
+  for (set in 1:10) {
+    for (rules in 1:5) {
+      col = (set - 1) * 5 + rules + 1
+      estimates[it, col] = mean(allResults[[it]][itemSets[[rules]], (set + 1)])
+    }
+  }
+}
+rm(Iterations, col, it, rules, set, itemSets)
+```
+
+## Splitting and trimming data (inner 95 %)
+
+```{r}
+d1_v1 = subset(estimates[2])
+d1_v2 = subset(estimates[3])
+d1_v3 = subset(estimates[4])
+d1_v4 = subset(estimates[5])
+d1_v5 = subset(estimates[6])
+d2_v1 = subset(estimates[7])
+d2_v2 = subset(estimates[8])
+d2_v3 = subset(estimates[9])
+d2_v4 = subset(estimates[10])
+d2_v5 = subset(estimates[11])
+d3_v1 = subset(estimates[12])
+d3_v2 = subset(estimates[13])
+d3_v3 = subset(estimates[14])
+d3_v4 = subset(estimates[15])
+d3_v5 = subset(estimates[16])
+d4_v1 = subset(estimates[17])
+d4_v2 = subset(estimates[18])
+d4_v3 = subset(estimates[19])
+d4_v4 = subset(estimates[20])
+d4_v5 = subset(estimates[21])
+d5_v1 = subset(estimates[22])
+d5_v2 = subset(estimates[23])
+d5_v3 = subset(estimates[24])
+d5_v4 = subset(estimates[25])
+d5_v5 = subset(estimates[26])
+i1_v1 = subset(estimates[27])
+i1_v2 = subset(estimates[28])
+i1_v3 = subset(estimates[29])
+i1_v4 = subset(estimates[30])
+i1_v5 = subset(estimates[31])
+i2_v1 = subset(estimates[32])
+i2_v2 = subset(estimates[33])
+i2_v3 = subset(estimates[34])
+i2_v4 = subset(estimates[35])
+i2_v5 = subset(estimates[36])
+i3_v1 = subset(estimates[37])
+i3_v2 = subset(estimates[38])
+i3_v3 = subset(estimates[39])
+i3_v4 = subset(estimates[40])
+i3_v5 = subset(estimates[41])
+i4_v1 = subset(estimates[42])
+i4_v2 = subset(estimates[43])
+i4_v3 = subset(estimates[44])
+i4_v4 = subset(estimates[45])
+i4_v5 = subset(estimates[46])
+i5_v1 = subset(estimates[47])
+i5_v2 = subset(estimates[48])
+i5_v3 = subset(estimates[49])
+i5_v4 = subset(estimates[50])
+i5_v5 = subset(estimates[51])
+
+highCutoff = 0.975
+lowCutoff = 1 - highCutoff
+
+d1_v1 = d1_v1 %>% filter(between(d1_v1, quantile(d1_v1, lowCutoff), quantile(d1_v1, highCutoff)))
+d1_v2 = d1_v2 %>% filter(between(d1_v2, quantile(d1_v2, lowCutoff), quantile(d1_v2, highCutoff)))
+d1_v3 = d1_v3 %>% filter(between(d1_v3, quantile(d1_v3, lowCutoff), quantile(d1_v3, highCutoff)))
+d1_v4 = d1_v4 %>% filter(between(d1_v4, quantile(d1_v4, lowCutoff), quantile(d1_v4, highCutoff)))
+d1_v5 = d1_v5 %>% filter(between(d1_v5, quantile(d1_v5, lowCutoff), quantile(d1_v5, highCutoff)))
+d2_v1 = d2_v1 %>% filter(between(d2_v1, quantile(d2_v1, lowCutoff), quantile(d2_v1, highCutoff)))
+d2_v2 = d2_v2 %>% filter(between(d2_v2, quantile(d2_v2, lowCutoff), quantile(d2_v2, highCutoff)))
+d2_v3 = d2_v3 %>% filter(between(d2_v3, quantile(d2_v3, lowCutoff), quantile(d2_v3, highCutoff)))
+d2_v4 = d2_v4 %>% filter(between(d2_v4, quantile(d2_v4, lowCutoff), quantile(d2_v4, highCutoff)))
+d2_v5 = d2_v5 %>% filter(between(d2_v5, quantile(d2_v5, lowCutoff), quantile(d2_v5, highCutoff)))
+d3_v1 = d3_v1 %>% filter(between(d3_v1, quantile(d3_v1, lowCutoff), quantile(d3_v1, highCutoff)))
+d3_v2 = d3_v2 %>% filter(between(d3_v2, quantile(d3_v2, lowCutoff), quantile(d3_v2, highCutoff)))
+d3_v3 = d3_v3 %>% filter(between(d3_v3, quantile(d3_v3, lowCutoff), quantile(d3_v3, highCutoff)))
+d3_v4 = d3_v4 %>% filter(between(d3_v4, quantile(d3_v4, lowCutoff), quantile(d3_v4, highCutoff)))
+d3_v5 = d3_v5 %>% filter(between(d3_v5, quantile(d3_v5, lowCutoff), quantile(d3_v5, highCutoff)))
+d4_v1 = d4_v1 %>% filter(between(d4_v1, quantile(d4_v1, lowCutoff), quantile(d4_v1, highCutoff)))
+d4_v2 = d4_v2 %>% filter(between(d4_v2, quantile(d4_v2, lowCutoff), quantile(d4_v2, highCutoff)))
+d4_v3 = d4_v3 %>% filter(between(d4_v3, quantile(d4_v3, lowCutoff), quantile(d4_v3, highCutoff)))
+d4_v4 = d4_v4 %>% filter(between(d4_v4, quantile(d4_v4, lowCutoff), quantile(d4_v4, highCutoff)))
+d4_v5 = d4_v5 %>% filter(between(d4_v5, quantile(d4_v5, lowCutoff), quantile(d4_v5, highCutoff)))
+d5_v1 = d5_v1 %>% filter(between(d5_v1, quantile(d5_v1, lowCutoff), quantile(d5_v1, highCutoff)))
+d5_v2 = d5_v2 %>% filter(between(d5_v2, quantile(d5_v2, lowCutoff), quantile(d5_v2, highCutoff)))
+d5_v3 = d5_v3 %>% filter(between(d5_v3, quantile(d5_v3, lowCutoff), quantile(d5_v3, highCutoff)))
+d5_v4 = d5_v4 %>% filter(between(d5_v4, quantile(d5_v4, lowCutoff), quantile(d5_v4, highCutoff)))
+d5_v5 = d5_v5 %>% filter(between(d5_v5, quantile(d5_v5, lowCutoff), quantile(d5_v5, highCutoff)))
+i1_v1 = i1_v1 %>% filter(between(i1_v1, quantile(i1_v1, lowCutoff), quantile(i1_v1, highCutoff)))
+i1_v2 = i1_v2 %>% filter(between(i1_v2, quantile(i1_v2, lowCutoff), quantile(i1_v2, highCutoff)))
+i1_v3 = i1_v3 %>% filter(between(i1_v3, quantile(i1_v3, lowCutoff), quantile(i1_v3, highCutoff)))
+i1_v4 = i1_v4 %>% filter(between(i1_v4, quantile(i1_v4, lowCutoff), quantile(i1_v4, highCutoff)))
+i1_v5 = i1_v5 %>% filter(between(i1_v5, quantile(i1_v5, lowCutoff), quantile(i1_v5, highCutoff)))
+i2_v1 = i2_v1 %>% filter(between(i2_v1, quantile(i2_v1, lowCutoff), quantile(i2_v1, highCutoff)))
+i2_v2 = i2_v2 %>% filter(between(i2_v2, quantile(i2_v2, lowCutoff), quantile(i2_v2, highCutoff)))
+i2_v3 = i2_v3 %>% filter(between(i2_v3, quantile(i2_v3, lowCutoff), quantile(i2_v3, highCutoff)))
+i2_v4 = i2_v4 %>% filter(between(i2_v4, quantile(i2_v4, lowCutoff), quantile(i2_v4, highCutoff)))
+i2_v5 = i2_v5 %>% filter(between(i2_v5, quantile(i2_v5, lowCutoff), quantile(i2_v5, highCutoff)))
+i3_v1 = i3_v1 %>% filter(between(i3_v1, quantile(i3_v1, lowCutoff), quantile(i3_v1, highCutoff)))
+i3_v2 = i3_v2 %>% filter(between(i3_v2, quantile(i3_v2, lowCutoff), quantile(i3_v2, highCutoff)))
+i3_v3 = i3_v3 %>% filter(between(i3_v3, quantile(i3_v3, lowCutoff), quantile(i3_v3, highCutoff)))
+i3_v4 = i3_v4 %>% filter(between(i3_v4, quantile(i3_v4, lowCutoff), quantile(i3_v4, highCutoff)))
+i3_v5 = i3_v5 %>% filter(between(i3_v5, quantile(i3_v5, lowCutoff), quantile(i3_v5, highCutoff)))
+i4_v1 = i4_v1 %>% filter(between(i4_v1, quantile(i4_v1, lowCutoff), quantile(i4_v1, highCutoff)))
+i4_v2 = i4_v2 %>% filter(between(i4_v2, quantile(i4_v2, lowCutoff), quantile(i4_v2, highCutoff)))
+i4_v3 = i4_v3 %>% filter(between(i4_v3, quantile(i4_v3, lowCutoff), quantile(i4_v3, highCutoff)))
+i4_v4 = i4_v4 %>% filter(between(i4_v4, quantile(i4_v4, lowCutoff), quantile(i4_v4, highCutoff)))
+i4_v5 = i4_v5 %>% filter(between(i4_v5, quantile(i4_v5, lowCutoff), quantile(i4_v5, highCutoff)))
+i5_v1 = i5_v1 %>% filter(between(i5_v1, quantile(i5_v1, lowCutoff), quantile(i5_v1, highCutoff)))
+i5_v2 = i5_v2 %>% filter(between(i5_v2, quantile(i5_v2, lowCutoff), quantile(i5_v2, highCutoff)))
+i5_v3 = i5_v3 %>% filter(between(i5_v3, quantile(i5_v3, lowCutoff), quantile(i5_v3, highCutoff)))
+i5_v4 = i5_v4 %>% filter(between(i5_v4, quantile(i5_v4, lowCutoff), quantile(i5_v4, highCutoff)))
+i5_v5 = i5_v5 %>% filter(between(i5_v5, quantile(i5_v5, lowCutoff), quantile(i5_v5, highCutoff)))
+```
+
+## Merging and transforming data frame
+
+```{r}
+estimatesTrimmed = data.frame(d1_v1, d1_v2, d1_v3, d1_v4, d1_v5, d2_v1, d2_v2, d2_v3, d2_v4, d2_v5, d3_v1, d3_v2, d3_v3, d3_v4, d3_v5, d4_v1, d4_v2, d4_v3, d4_v4, d4_v5, d5_v1, d5_v2, d5_v3, d5_v4, d5_v5, i1_v1, i1_v2, i1_v3, i1_v4, i1_v5, i2_v1, i2_v2, i2_v3, i2_v4, i2_v5, i3_v1, i3_v2, i3_v3, i3_v4, i3_v5, i4_v1, i4_v2, i4_v3, i4_v4, i4_v5, i5_v1, i5_v2, i5_v3, i5_v4, i5_v5)
+
+oneColTrimmed <- gather(estimatesTrimmed, key = "key", value = "value")
+
+dfTrimmed = data.frame(type = c(rep(1, 23750), rep(2, 23750)), var = rep(c(rep(5, 4750), rep(4, 4750), rep(3, 4750), rep(2, 4750), rep(1, 4750)), 2), rule = rep(c(rep(1, 950), rep(2, 950), rep(3, 950), rep(4, 950), rep(5, 950)),50), oneColTrimmed)
+```
+
+## Descriptive statistics
+
+d = direct equating, i = indirect equating, v = number of rules
+
+```{r}
+describe(estimatesTrimmed[, 1:50])
+
+type1 = subset(estimatesTrimmed[1:25])
+type1_oc = gather(type1, key = "key", value = "value")
+describe(type1_oc)
+mean(type1_oc$value)
+
+type2 = subset(estimatesTrimmed[26:50])
+type2_oc = gather(type2, key = "key", value = "value")
+describe(type2_oc)
+mean(type2_oc$value)
+
+var1 = subset(estimatesTrimmed[c(1:5, 26:30)])
+var1_oc = gather(var1, key = "key", value = "value")
+describe(var1_oc)
+mean(var1_oc$value)
+
+var2 = subset(estimatesTrimmed[c(6:10, 31:35)])
+var2_oc = gather(var2, key = "key", value = "value")
+describe(var2_oc)
+mean(var2_oc$value)
+
+var3 = subset(estimatesTrimmed[c(11:15, 36:40)])
+var3_oc = gather(var3, key = "key", value = "value")
+describe(var3_oc)
+mean(var3_oc$value)
+
+var4 = subset(estimatesTrimmed[c(16:20, 41:45)])
+var4_oc = gather(var4, key = "key", value = "value")
+describe(var4_oc)
+mean(var4_oc$value)
+
+var5 = subset(estimatesTrimmed[c(21:25, 46:50)])
+var5_oc = gather(var5, key = "key", value = "value")
+describe(var5_oc)
+mean(var5_oc$value)
+
+rule1 = subset(estimatesTrimmed[c(1, 6, 11, 16, 21, 26, 31, 36, 41, 46)])
+rule1_oc = gather(rule1, key = "key", value = "value")
+describe(rule1_oc)
+mean(rule1_oc$value)
+
+rule2 = subset(estimatesTrimmed[c(2, 7, 12, 17, 22, 27, 32, 37, 42, 47)])
+rule2_oc = gather(rule2, key = "key", value = "value")
+describe(rule2_oc)
+mean(rule2_oc$value)
+
+rule3 = subset(estimatesTrimmed[c(3, 8, 13, 18, 23, 28, 33, 38, 43, 48)])
+rule3_oc = gather(rule3, key = "key", value = "value")
+describe(rule3_oc)
+mean(rule3_oc$value)
+
+rule4 = subset(estimatesTrimmed[c(4, 9, 14, 19, 24, 29, 34, 39, 44, 49)])
+rule4_oc = gather(rule4, key = "key", value = "value")
+describe(rule4_oc)
+mean(rule4_oc$value)
+
+rule5 = subset(estimatesTrimmed[c(5, 10, 15, 20, 25, 30, 35, 40, 45, 50)])
+rule5_oc = gather(rule5, key = "key", value = "value")
+describe(rule5_oc)
+mean(rule5_oc$value)
+```
+
+## ANOVA and contrasts
+
+```{r}
+# Transforming type, var and rule into factors
+
+dfTrimmed$type = as.factor(dfTrimmed$type)
+dfTrimmed$var = as.factor(dfTrimmed$var)
+dfTrimmed$rule = as.factor(dfTrimmed$rule)
+
+# Defining contrasts
+
+c1 = c(1.5, 1.5, -1, -1, -1) # group contrast
+c2 = c(2, -1, -2, -1, 2) # quadratic contrast
+
+mat1 = cbind(c1)
+mat2 = cbind(c2)
+
+contrasts(dfTrimmed$var) = mat1
+contrasts(dfTrimmed$rule) = mat2
+
+# Conducting ANOVA
+
+options(scipen = 999)
+mod.new = aov(value ~ type * var * rule, data = dfTrimmed)
+(sum.new = summary.aov(mod.new, split=list(var = list("Group_Comparison" = 1), rule = list("Quadratic" = 1))))
+omega_squared(mod.new)
+
+# Creating a table of the statistics from the ANOVA with more digits
+
+Factor = c("ET", "EV", "EV_contrast", "RA", "RA_trend", "ET x EV", "-", "ET x RA", "-", "EV x RA", "-", "ET x EV x RA", "-", "Residual")
+Degrees = round(as.numeric(sum.new[[1]]$Df), digits = 10)
+Sum_Square = round(as.numeric(sum.new[[1]]$`Sum Sq`), digits = 10)
+Mean_Square = round(as.numeric(sum.new[[1]]$`Mean Sq`), digits = 10)
+F_Value = round(as.numeric(sum.new[[1]]$`F value`), digits = 10)
+p_Value = round(as.numeric(sum.new[[1]]$`Pr(>F)`), digits = 10)
+(df_ANOVA = data.frame(Factor, Degrees, Sum_Square, Mean_Square, F_Value, p_Value))
+
+# Calculating contrasts
+
+jmv::ANOVA(formula = value ~ type * var * rule, data = dfTrimmed, effectSize = "omega", postHoc = ~ type * var * rule, contrasts = list(list(var = "rule", type = "polynomial"), list(var = "var", type = "polynomial")))
+
+TukeyHSD(mod.new, "var")
+
+# Calculating the mean differences of the contrasts
+
+(x1 = (mean(var1_oc$value) + mean(var2_oc$value) + mean(var3_oc$value))/3)
+(x2 = (mean(var4_oc$value) + mean(var5_oc$value))/2)
+```
+
+# Effect sizes (Omega squared)
+
+```{r}
+ss_total = 226.5285716219 + 1344.3094846830 + 637.7495313988 + 106.9274055542 + 8.0231609941 + 20.1867696174 + 12.5088455094 + 8752.6126015211
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 226.5285716219, mse = 0.0368608659,
+sst = (ss_total), a = .05) # ET
+
+omega.full.SS(dfm = 4, dfe = 237450,
+msm = 336.0773711708, mse = 0.0368608659,
+sst = (ss_total), a = .05) # EV
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 1225.9539917622, mse = 0.0368608659,
+sst = (ss_total), a = .05) # EV Contrast
+
+omega.full.SS(dfm = 4, dfe = 237450,
+msm = 159.4373828497, mse = 0.0368608659,
+sst = (ss_total), a = .05) # RA
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 450.5662092836, mse = 0.0368608659,
+sst = (ss_total), a = .05) # RA Trend
+
+omega.full.SS(dfm = 4, dfe = 237450,
+msm = 26.7318513886, mse = 0.0368608659,
+sst = (ss_total), a = .05) # ET x EV
+
+omega.full.SS(dfm = 4, dfe = 237450,
+msm = 2.0057902485, mse = 0.0368608659,
+sst = (ss_total), a = .05) # ET x RA
+
+omega.full.SS(dfm = 16, dfe = 237450,
+msm = 1.2616731011, mse = 0.0368608659,
+sst = (ss_total), a = .05) # EV x RA
+
+omega.full.SS(dfm = 16, dfe = 237450,
+msm = 0.7818028443, mse = 0.0368608659,
+sst = (ss_total), a = .05) # ET x EV x RA
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 16.2^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v5v4
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 29.9^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v5v3
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 109.1^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v5v2
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 157.2^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v5v1
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 13.7^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v4v3
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 92.8^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v4v2
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 140.9^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v4v1
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 79.1^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v3v2
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 127.2^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v3v1
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 48.1^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # v2v1
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 48.5894^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r1r2
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 48.5771^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r1r3
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 18.4023^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r1r4
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 64.1836^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r1r5
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 0.0123^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r2r3
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 30.1872^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r2r4
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 112.7731^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r2r5
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 30.1479^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r3r4
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 112.7608^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r3r5
+
+omega.full.SS(dfm = 1, dfe = 237450,
+msm = 82.5859^2 * 0.0368608659, mse = 0.0368608659,
+sst = (ss_total), a = .05) # r4r5
+```
+
+# Plotting data
+
+```{r}
+ggplot(dfTrimmed, aes(x = type, y = value, fill = type))  +
+  ylim(0, 2.5) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.major = element_line(colour = "grey")) +
+  geom_boxplot() +
+  scale_x_discrete(labels = c("direkt", "indirekt")) +
+  scale_y_continuous(breaks=c(0.5, 1, 1.5, 2, 2.5), limits = c(0,2.5)) +
+  scale_fill_manual(values = c(rep("lightgrey", 2))) +
+  labs(x = "Equating-Typ", y = "Abweichungsquadrat") +
+  guides(fill=FALSE)
+
+ggplot(dfTrimmed, aes(x = var, y = value, fill = var))  +
+  ylim(0, 2.5) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.major = element_line(colour = "grey")) +
+  geom_boxplot() +
+  scale_x_discrete() +
+  scale_y_continuous(breaks=c(0.5, 1, 1.5, 2, 2.5), limits = c(0,2.5)) +
+  scale_fill_manual(values = c(rep("lightgrey", 5))) +
+  labs(x = "Equating-Variante", y = "Abweichungsquadrat") +
+  guides(fill=FALSE)
+
+ggplot(dfTrimmed, aes(x = rule, y = value, fill = rule))  +
+  ylim(0, 2.5) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.major = element_line(colour = "grey")) +
+  geom_boxplot() +
+  scale_x_discrete() +
+  scale_y_continuous(breaks=c(0.5, 1, 1.5, 2, 2.5), limits = c(0,2.5)) +
+  scale_fill_manual(values = c(rep("lightgrey", 5))) +
+  labs(x = "Regelanzahl", y = "Abweichungsquadrat") +
+  guides(fill=FALSE)
+
+ggplot(dfTrimmed, aes(x = var, y = value, fill = type))  +
+  ylim(0, 2.5) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.major = element_line(colour = "grey"), legend.position = "top") +
+  geom_boxplot() +
+  scale_x_discrete() +
+  scale_y_continuous(breaks=c(0.5, 1, 1.5, 2, 2.5), limits = c(0,2.5)) +
+  scale_fill_manual(values = c("lightgrey", "#A4A4A4"), labels = c("direkt", "indirekt")) +
+  labs(x = "Equating-Variante", y = "Abweichungsquadrat", fill = "Equating-Typ")
+
+ggplot(dfTrimmed, aes(x = type, y = value, fill = var))  +
+  ylim(0, 2.5) +
+  theme_bw(base_size = 12) +
+  theme(panel.grid.major = element_line(colour = "grey"), legend.position = "top", legend.key.width = unit(0.25,"cm")) +
+  geom_boxplot() +
+  scale_x_discrete(labels = c("direkt", "indirekt")) +
+  scale_y_continuous(breaks=c(0.5, 1, 1.5, 2, 2.5), limits = c(0,2.5)) +
+  #scale_fill_manual(values = c("#A9BCF5", "#F5A9A9", "#F2F5A9", "#A9F5A9", "#F5D0A9")) +
+  scale_fill_manual(values = c("#FFFFFF", "#E6E6E6", "#BDBDBD", "#A4A4A4", "#848484")) +
+  labs(x = "Equating-Typ", y = "Abweichungsquadrat", fill = "Equating-Variante")
+```
